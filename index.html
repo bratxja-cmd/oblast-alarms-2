@@ -77,16 +77,7 @@
     <h2 id="d-name"></h2>
     <div class="sub" id="d-sub"></div>
     <div class="cards" id="d-cards"></div>
-    <div class="grid2">
-      <div>
-        <div class="panel-title"><span>По місяцях</span><span id="d-month-unit"></span></div>
-        <div class="months" id="d-months"></div>
-      </div>
-      <div>
-        <div class="panel-title"><span>Типи загроз</span><span>тривог</span></div>
-        <div class="types" id="d-types"></div>
-      </div>
-    </div>
+    <div id="d-levels"></div>
   </div>
 
   <footer>
@@ -122,34 +113,33 @@ function render(){
 function showDetail(r){
   const d=document.getElementById("detail");d.style.display="block";
   document.getElementById("d-name").textContent=r.name;
-  document.getElementById("d-sub").textContent=`${r.oblast} область · uid ${r.uid}`;
+  document.getElementById("d-sub").textContent=`${r.oblast} · подій (сума по районах): ${r.count}`;
   document.getElementById("d-cards").innerHTML=`
     <div class="card"><div class="k">Усього тривог</div><div class="v">${r.count}</div></div>
     <div class="card"><div class="k">Сумарно годин</div><div class="v">${r.total_hours.toFixed(0)}</div></div>
     <div class="card"><div class="k">Середня, хв</div><div class="v">${r.avg_minutes.toFixed(0)}</div></div>`;
-  document.getElementById("d-month-unit").textContent=unit();
-  const mwrap=document.getElementById("d-months");mwrap.innerHTML="";
-  const mk=Object.keys(r.by_month).sort();
-  const mvals=mk.map(k=>METRIC==="dur"?r.by_month[k].hours:r.by_month[k].count);
-  const mmax=Math.max(...mvals,1);
-  mk.forEach((k,i)=>{
-    const col=document.createElement("div");col.className="mcol";
-    const v=mvals[i];
-    col.innerHTML=`<div class="mval">${METRIC==="dur"?v.toFixed(0):v}</div>
-      <div class="mbar-wrap"><div class="mbar" style="height:${(v/mmax*100).toFixed(1)}%"></div></div>
-      <div class="mlabel">${r.by_month[k].label.slice(0,3)}</div>`;
-    mwrap.appendChild(col);
-  });
-  const tw=document.getElementById("d-types");tw.innerHTML="";
-  const ents=Object.entries(r.by_type).sort((a,b)=>b[1]-a[1]);
-  const tmax=Math.max(...ents.map(e=>e[1]),1);
-  ents.forEach(([name,cnt])=>{
-    const row=document.createElement("div");row.className="trow";
-    const c=TYPE_COLORS[name]||"#9a8f7d";
-    row.innerHTML=`<div>${name}</div>
-      <div class="ttrack"><div class="tfill" style="width:${(cnt/tmax*100).toFixed(1)}%;background:${c}"></div></div>
-      <div style="font-family:'Courier New',monospace;font-size:12px;color:var(--muted)">${cnt}</div>`;
-    tw.appendChild(row);
+
+  // Розбивка за рівнями (райони / громади / міста)
+  const lw=document.getElementById("d-levels");lw.innerHTML="";
+  const levels=r.levels||{};
+  const order=["Райони","Громади","Міста","Область","Інше"];
+  const keys=Object.keys(levels).sort((a,b)=>order.indexOf(a)-order.indexOf(b));
+  if(!keys.length){lw.innerHTML="<div style='color:var(--muted)'>Немає деталізації за рівнями.</div>";}
+  keys.forEach(lvl=>{
+    const locs=levels[lvl];if(!locs||!locs.length)return;
+    const max=Math.max(...locs.map(l=>METRIC==="dur"?l.total_hours:l.count),1);
+    const sec=document.createElement("div");sec.style.marginBottom="22px";
+    sec.innerHTML=`<div class="panel-title"><span>${lvl} · ${locs.length}</span><span>${unit()}</span></div>`;
+    const box=document.createElement("div");box.className="bars";
+    locs.forEach(l=>{
+      const v=METRIC==="dur"?l.total_hours:l.count;
+      const row=document.createElement("div");row.className="bar-row";row.style.cursor="default";
+      row.innerHTML=`<div class="name" title="${l.title}">${l.title}</div>
+        <div class="bar-track"><div class="bar-fill" style="width:${(v/max*100).toFixed(1)}%"></div></div>
+        <div class="bar-val">${METRIC==="dur"?v.toFixed(0)+" год":v}</div>`;
+      box.appendChild(row);
+    });
+    sec.appendChild(box);lw.appendChild(sec);
   });
   document.getElementById("detail").scrollIntoView({behavior:"smooth",block:"nearest"});
 }
