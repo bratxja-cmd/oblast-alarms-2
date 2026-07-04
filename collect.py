@@ -36,14 +36,18 @@ HISTORY_DELAY_SEC = 31
 def init_db(con):
     con.execute("""
         CREATE TABLE IF NOT EXISTS alerts (
-            region_uid   INTEGER NOT NULL,
-            region_name  TEXT NOT NULL,
-            oblast       TEXT,
-            alert_type   TEXT,
-            started_at   TEXT NOT NULL,
-            finished_at  TEXT,
-            calculated   INTEGER,
-            PRIMARY KEY (region_uid, started_at)
+            region_uid    INTEGER NOT NULL,   -- uid області, яку запитували
+            region_name   TEXT NOT NULL,      -- назва області (для підпису)
+            oblast        TEXT,
+            loc_type      TEXT,               -- oblast / raion / city / hromada
+            loc_title     TEXT,               -- назва конкретної локації (район/місто)
+            loc_uid       TEXT,               -- uid конкретної локації
+            alert_type    TEXT,
+            started_at    TEXT NOT NULL,
+            finished_at   TEXT,
+            calculated    INTEGER,
+            -- дедуплікація: та сама локація не має двох тривог з одним часом початку
+            PRIMARY KEY (loc_uid, started_at)
         )
     """)
     con.commit()
@@ -76,15 +80,20 @@ def upsert(con, region, alerts):
         started = a.get("started_at")
         if not started:
             continue
+        # uid конкретної локації; якщо API не дав — беремо uid області
+        loc_uid = str(a.get("location_uid") or region["uid"])
         cur = con.execute(
             """INSERT OR IGNORE INTO alerts
-               (region_uid, region_name, oblast, alert_type,
-                started_at, finished_at, calculated)
-               VALUES (?,?,?,?,?,?,?)""",
+               (region_uid, region_name, oblast, loc_type, loc_title, loc_uid,
+                alert_type, started_at, finished_at, calculated)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
             (
                 region["uid"],
-                a.get("location_title") or region["name"],
+                region["name"],
                 a.get("location_oblast") or region.get("oblast"),
+                a.get("location_type"),
+                a.get("location_title") or region["name"],
+                loc_uid,
                 a.get("alert_type"), started,
                 a.get("finished_at"),
                 1 if a.get("calculated") else 0,
@@ -117,6 +126,24 @@ def main():
         print(f"    отримано {len(alerts)}, нових у базі: {added}")
         if i < len(REGIONS):
             time.sleep(HISTORY_DELAY_SEC)
+
+    # Звіт про розподіл рівнів локацій (щоб побачити, що реально прийшло)
+    print("\n=== Розподіл рівнів по областях (loc_type) ===")
+    rows = con.execute("""
+        SELECT region_name, loc_type, COUNT(*) c
+        FROM alerts GROUP BY region_name, loc_type
+        ORDER BY region_name, c DESC
+    """).fetchall()
+    from collections import defaultdict
+    by_region = defaultdict(list)
+    for rn, lt, c in rows:
+        by_region[rn].append(f"{lt or 'None'}={c}")
+    for rn in sorted(by_region):
+        print(f"  {rn}: {', '.join(by_region[rn])}")
+    totals = con.execute("""
+        SELECT loc_type, COUNT(*) c FROM alerts GROUP BY loc_type ORDER BY c DESC
+    """).fetchall()
+    print("  РАЗОМ по рівнях:", ", ".join(f"{lt or 'None'}={c}" for lt, c in totals))
 
     con.close()
     print(f"\nГотово. Нових записів: {total}. База: {DB}")
