@@ -71,6 +71,8 @@
     <button id="t-cnt" onclick="setMetric('cnt')">Кількість тривог</button>
   </div>
 
+  <div class="toggle" id="period-toggle" style="margin-top:0;flex-wrap:wrap"></div>
+
   <div class="panel-title"><span>Рейтинг областей · натисніть для деталей</span><span id="rank-unit">години</span></div>
   <div class="bars" id="bars"></div>
 
@@ -86,6 +88,7 @@
   <footer>
     <div id="f-note"></div>
     <div>Дані: alerts.in.ua API. Збираються щодня, накопичуються вперед.</div>
+    <div id="f-hidden" style="margin-top:6px;color:var(--muted)"></div>
   </footer>
 </div>
 <div class="tip" id="tip"></div>
@@ -93,7 +96,20 @@
 <script>
 const TYPE_COLORS={"Повітряна тривога":"#c8442a","Артобстріл":"#d98a1f","Вуличні бої":"#6e6a5e","Хімічна загроза":"#7a9a3d","Ядерна загроза":"#8a4fb0","unknown":"#9a8f7d"};
 const MONTH_NAMES={"01":"січ","02":"лют","03":"бер","04":"кві","05":"тра","06":"чер","07":"лип","08":"сер","09":"вер","10":"жов","11":"лис","12":"гру"};
-let DATA=null,METRIC="dur",SEL=null;
+let DATA=null,METRIC="dur",SEL=null,PERIOD="";
+
+// Числа з урахуванням обраного періоду. Повертає {count, hours} або null,
+// якщо для обраного місяця в цієї локації даних немає.
+function periodVals(obj){
+  if(!PERIOD){
+    return {count: obj.count, hours: obj.total_hours};
+  }
+  const m = (obj.by_month||{})[PERIOD];
+  if(!m) return null;                      // немає даних за цей місяць
+  return {count: m.count, hours: m.hours};
+}
+// Значення для активної метрики з {count,hours}
+function metricOf(v){ return METRIC==="dur" ? v.hours : v.count; }
 const val=r=>METRIC==="dur"?r.total_hours:r.count;
 const unit=()=>METRIC==="dur"?"години":"тривог";
 
@@ -111,12 +127,22 @@ function monthLabel(key){
 }
 
 function render(){
-  const regions=[...DATA.regions].filter(r=>r.count>0).sort((a,b)=>val(b)-val(a));
-  const max=Math.max(...regions.map(val),1);
+  // рахуємо значення кожної області з урахуванням PERIOD; відкидаємо ті, де немає даних
+  const list=[];
+  for(const r of DATA.regions){
+    const pv=periodVals(r);
+    if(!pv) continue;
+    const v=metricOf(pv);
+    if(v<=0 && PERIOD==="" ) continue;      // за весь період ховаємо нульові
+    if(v<=0) continue;                       // за місяць теж ховаємо порожні
+    list.push({r, v, pv});
+  }
+  list.sort((a,b)=>b.v-a.v);
+  const max=Math.max(...list.map(x=>x.v),1);
   document.getElementById("rank-unit").textContent=unit();
   const bars=document.getElementById("bars");bars.innerHTML="";
-  regions.forEach(r=>{
-    const v=val(r),row=document.createElement("div");
+  list.forEach(({r,v})=>{
+    const row=document.createElement("div");
     row.className="bar-row"+(SEL===r.uid?" sel":"");
     row.onclick=()=>{SEL=r.uid;render();showDetail(r);};
     row.innerHTML=`<div class="name" title="${r.name}">${r.name}</div>
@@ -124,7 +150,7 @@ function render(){
       <div class="bar-val">${METRIC==="dur"?v.toFixed(0)+" год":v}</div>`;
     bars.appendChild(row);
   });
-  if(SEL){const r=regions.find(x=>x.uid===SEL);if(r)showDetail(r);}
+  if(SEL){const r=DATA.regions.find(x=>x.uid===SEL);if(r&&periodVals(r))showDetail(r);}
 }
 
 // ── ЗМІНА 2: рендер помісячного графіка (стовпчики) для області ──
@@ -134,7 +160,7 @@ function renderTypes(r){
   const entries=Object.entries(types).sort((a,b)=>b[1]-a[1]);
   if(!entries.length)return;
   const sec=document.createElement("div");sec.style.marginBottom="26px";
-  sec.innerHTML=`<div class="panel-title"><span>За типами тривог</span><span></span></div>`;
+  sec.innerHTML=`<div class="panel-title"><span>За типами тривог</span><span style="text-transform:none;font-size:11px">усі оголошення, за весь період</span></div>`;
   const box=document.createElement("div");
   box.style.display="flex";box.style.flexWrap="wrap";box.style.gap="8px";
   entries.forEach(([name,cnt])=>{
@@ -198,32 +224,44 @@ function renderMonths(r){
 
 function showDetail(r){
   const d=document.getElementById("detail");d.style.display="block";
+  const pv=periodVals(r)||{count:0,hours:0};
+  const periodLabel = PERIOD ? ` · ${(r.by_month[PERIOD]||{}).label||PERIOD} ${PERIOD.slice(0,4)}` : " · весь період";
   document.getElementById("d-name").textContent=r.name;
-  document.getElementById("d-sub").textContent=`${r.oblast} · подій (сума по районах): ${r.count}`;
+  document.getElementById("d-sub").textContent=`${r.oblast}${periodLabel}`;
+  // avg рахуємо лише коли є повні дані (весь період); за місяць avg не зберігається
+  const avgCard = PERIOD ? "" :
+    `<div class="card"><div class="k">Середня, хв</div><div class="v">${r.avg_minutes.toFixed(0)}</div></div>`;
   document.getElementById("d-cards").innerHTML=`
-    <div class="card"><div class="k">Усього тривог</div><div class="v">${r.count}</div></div>
-    <div class="card"><div class="k">Сумарно годин</div><div class="v">${r.total_hours.toFixed(0)}</div></div>
-    <div class="card"><div class="k">Середня, хв</div><div class="v">${r.avg_minutes.toFixed(0)}</div></div>`;
+    <div class="card"><div class="k">Усього тривог</div><div class="v">${pv.count}</div></div>
+    <div class="card"><div class="k">Сумарно годин</div><div class="v">${pv.hours.toFixed(0)}</div></div>
+    ${avgCard}`;
 
-  renderMonths(r);
-  renderTypes(r);
+  renderMonths(r);   // завжди весь період — не залежить від PERIOD
+  renderTypes(r);    // завжди весь період — не залежить від PERIOD
 
-  renderMonths(r);
-
-  // Розбивка за рівнями (райони / громади / міста)
+  // Розбивка за рівнями — З УРАХУВАННЯМ PERIOD
   const lw=document.getElementById("d-levels");lw.innerHTML="";
   const levels=r.levels||{};
   const order=["Райони","Громади","Міста","Область","Інше"];
   const keys=Object.keys(levels).sort((a,b)=>order.indexOf(a)-order.indexOf(b));
-  if(!keys.length){lw.innerHTML="<div style='color:var(--muted)'>Немає деталізації за рівнями.</div>";}
   keys.forEach(lvl=>{
-    const locs=levels[lvl];if(!locs||!locs.length)return;
-    const max=Math.max(...locs.map(l=>METRIC==="dur"?l.total_hours:l.count),1);
+    let locs=levels[lvl];if(!locs||!locs.length)return;
+    // рахуємо кожну локацію за PERIOD, відкидаємо порожні
+    const items=[];
+    for(const l of locs){
+      const lpv=periodVals(l);
+      if(!lpv) continue;
+      const v=metricOf(lpv);
+      if(v<=0) continue;
+      items.push({l, v});
+    }
+    if(!items.length) return;
+    items.sort((a,b)=>b.v-a.v);
+    const max=Math.max(...items.map(x=>x.v),1);
     const sec=document.createElement("div");sec.style.marginBottom="22px";
-    sec.innerHTML=`<div class="panel-title"><span>${lvl} · ${locs.length}</span><span>${unit()}</span></div>`;
+    sec.innerHTML=`<div class="panel-title"><span>${lvl} · ${items.length}</span><span>${unit()}</span></div>`;
     const box=document.createElement("div");box.className="bars";
-    locs.forEach(l=>{
-      const v=METRIC==="dur"?l.total_hours:l.count;
+    items.forEach(({l,v})=>{
       const row=document.createElement("div");row.className="bar-row";row.style.cursor="default";
       row.innerHTML=`<div class="name" title="${l.title}">${l.title}</div>
         <div class="bar-track"><div class="bar-fill" style="width:${(v/max*100).toFixed(1)}%"></div></div>
@@ -235,6 +273,30 @@ function showDetail(r){
   document.getElementById("detail").scrollIntoView({behavior:"smooth",block:"nearest"});
 }
 
+function setPeriod(p){
+  PERIOD=p;
+  document.querySelectorAll("#period-toggle button").forEach(b=>{
+    b.classList.toggle("active", b.dataset.p===p);
+  });
+  render();
+}
+
+// Будує кнопки періоду з усіх місяців, що є в даних (оновлюється сам щомісяця)
+function buildPeriodToggle(){
+  const set=new Set();
+  const labels={};
+  DATA.regions.forEach(r=>{
+    Object.entries(r.by_month||{}).forEach(([k,v])=>{ set.add(k); labels[k]=v.label; });
+  });
+  const months=[...set].sort();
+  const tog=document.getElementById("period-toggle");
+  let btns=`<button data-p="" class="active" onclick="setPeriod('')">Весь період</button>`;
+  months.forEach(k=>{
+    btns+=`<button data-p="${k}" onclick="setPeriod('${k}')">${labels[k]} ${k.slice(0,4)}</button>`;
+  });
+  tog.innerHTML=btns;
+}
+
 function setMetric(m){METRIC=m;
   document.getElementById("t-dur").classList.toggle("active",m==="dur");
   document.getElementById("t-cnt").classList.toggle("active",m==="cnt");
@@ -244,8 +306,12 @@ fetch("data/stats.json").then(r=>r.json()).then(d=>{
   DATA=d;
   document.getElementById("m-src").textContent="джерело: "+d.source;
   document.getElementById("m-upd").textContent="оновлено: "+new Date(d.generated_at).toLocaleDateString("uk");
-  document.getElementById("m-cnt").textContent="областей: "+d.regions.length;
+  document.getElementById("m-cnt").textContent="областей: "+d.regions.filter(r=>r.count>0).length;
+  const hidden=d.regions.filter(r=>r.count===0).map(r=>r.name);
+  if(hidden.length){document.getElementById("f-hidden").textContent=
+    "Не показано (немає зафіксованих даних, не означає відсутність тривог): "+hidden.join(", ")+".";}
   document.getElementById("f-note").textContent=d.note||"";
+  buildPeriodToggle();
   render();
 }).catch(()=>{document.getElementById("bars").innerHTML=
   "<div style='color:var(--accent)'>Дані ще не зібрані. Запустіть workflow (collect.py → build_stats.py).</div>";});
