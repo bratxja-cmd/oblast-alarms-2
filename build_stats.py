@@ -1,16 +1,6 @@
 #!/usr/bin/env python3
 """
 Будує stats.json — дерево область -> локації (район / громада / місто).
-
-СТРУКТУРА:
-  Кожна область містить список локацій, згрупованих за рівнем (loc_type).
-  Для кожної локації рахуються кількість подій і тривалість (зі злиттям
-  перекриттів у межах цієї локації).
-
-  Обласний підсумок (count/hours у корені області) = сума по РАЙОНАХ,
-  бо район — основний рівень оголошення. Громади й міста показуються
-  окремо в деталях і НЕ додаються до обласного підсумку (щоб не було
-  подвійного рахунку — та сама подія часто є і по району, і по громаді).
 """
 
 import json
@@ -23,6 +13,10 @@ from config import REGIONS, ALERT_TYPES
 
 DB = Path(__file__).parent / "data" / "alerts.db"
 OUT = Path(__file__).parent / "data" / "stats.json"
+
+# ЗМІНА: поріг «залипання». Відкрита тривога, старша за стільки днів,
+# вважається технічним сміттям (немає відбою) і відкидається.
+STUCK_DAYS = 7
 
 MONTHS_UA = {1: "Січень", 2: "Лютий", 3: "Березень", 4: "Квітень",
              5: "Травень", 6: "Червень", 7: "Липень", 8: "Серпень",
@@ -58,7 +52,7 @@ def merge_overlaps(intervals):
     return [(s, e) for s, e in merged]
 
 
-def summarize(intervals, open_count, by_type):
+def summarize(intervals, open_starts, by_type):
     """Кількість подій, години, помісячно, типи — для одного набору тривог."""
     events = merge_overlaps(intervals)
     total_min = sum((e - s).total_seconds() / 60.0 for s, e in events)
@@ -67,12 +61,17 @@ def summarize(intervals, open_count, by_type):
         mk = f"{s.year}-{s.month:02d}"
         by_month[mk]["count"] += 1
         by_month[mk]["minutes"] += (e - s).total_seconds() / 60.0
+    # ЗМІНА: відкриті тривоги (без завершення) додаємо в місяць ЇХ ПОЧАТКУ.
+    # Вони дають +1 до кількості, але 0 годин (тривалість невідома).
+    for s in open_starts:
+        mk = f"{s.year}-{s.month:02d}"
+        by_month[mk]["count"] += 1
     months = {}
     for mk, v in sorted(by_month.items()):
         months[mk] = {"label": MONTHS_UA.get(int(mk.split("-")[1]), mk),
                       "count": v["count"], "hours": round(v["minutes"] / 60.0, 1)}
     return {
-        "count": len(events) + open_count,
+        "count": len(events) + len(open_starts),
         "total_hours": round(total_min / 60.0, 1),
         "avg_minutes": round(total_min / len(events), 1) if events else 0,
         "by_month": months,
@@ -86,8 +85,9 @@ def main():
     rows = con.execute("SELECT * FROM alerts").fetchall()
     con.close()
 
-    # групуємо: область -> локація (loc_uid) -> дані
-    # локація зберігає свій рівень і назву
+    # ЗМІНА: поточний момент — для оцінки віку відкритих тривог.
+    NOW = dt.datetime.now()
+
     oblasts = {r["uid"]: {"uid": r["uid"], "name": r["name"], "oblast": r["oblast"],
                           "locs": {}} for r in REGIONS}
 
@@ -99,45 +99,47 @@ def main():
         locs = oblasts[ruid]["locs"]
         if loc_uid not in locs:
             locs[loc_uid] = {"title": r["loc_title"], "level": r["loc_type"] or "unknown",
-                             "intervals": [], "open": 0, "by_type": defaultdict(int)}
+                             "intervals": [], "open": [], "by_type": defaultdict(int)}
         loc = locs[loc_uid]
         s = parse_dt(r["started_at"]); f = parse_dt(r["finished_at"])
         if not s:
             continue
-        loc["by_type"][r["alert_type"] or "unknown"] += 1
         if f and f > s:
+            loc["by_type"][r["alert_type"] or "unknown"] += 1
             loc["intervals"].append((s, f))
         else:
-            loc["open"] += 1
+            # ЗМІНА: відкрита тривога. Якщо вона «висить» довше за поріг —
+            # це технічне сміття (немає відбою), відкидаємо повністю.
+            age_days = (NOW - s).total_seconds() / 86400
+            if age_days > STUCK_DAYS:
+                continue
+            loc["by_type"][r["alert_type"] or "unknown"] += 1
+            loc["open"].append(s)
 
     regions = []
     for ruid, ob in oblasts.items():
-        # рахуємо кожну локацію
         locs_out = []
-        raion_intervals, raion_open, raion_types = [], 0, defaultdict(int)
+        raion_intervals, raion_open, raion_types = [], [], defaultdict(int)
         for loc_uid, loc in ob["locs"].items():
             st = summarize(loc["intervals"], loc["open"], loc["by_type"])
             st.update({"title": loc["title"], "level": loc["level"]})
             locs_out.append(st)
-            # обласний підсумок = сума по районах
             if loc["level"] == "raion":
                 raion_intervals += loc["intervals"]
-                raion_open += loc["open"]
+                raion_open += loc["open"]  # тепер конкатенація списків дат
                 for k, v in loc["by_type"].items():
                     raion_types[k] += v
 
-        # якщо районів немає — беремо всі рівні для підсумку (щоб не було 0)
         if raion_intervals or raion_open:
             top = summarize(raion_intervals, raion_open, raion_types)
         else:
-            alli, allo, allt = [], 0, defaultdict(int)
+            alli, allo, allt = [], [], defaultdict(int)
             for loc in ob["locs"].values():
                 alli += loc["intervals"]; allo += loc["open"]
                 for k, v in loc["by_type"].items():
                     allt[k] += v
             top = summarize(alli, allo, allt)
 
-        # групуємо локації за рівнем для відображення
         by_level = defaultdict(list)
         for lo in locs_out:
             by_level[lo["level"]].append(lo)
