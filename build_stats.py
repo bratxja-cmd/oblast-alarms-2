@@ -140,6 +140,16 @@ def main():
                     allt[k] += v
             top = summarize(alli, allo, allt)
 
+        # ЗМІНА (Підхід Б): обласний by_type — валова сума ВСІХ оголошень
+        # по всіх рівнях області (район+громада+місто), без злиття.
+        # Це число більше за count, бо та сама тривога приходить на кількох
+        # рівнях; воно показує загальну кількість оголошень кожного типу.
+        oblast_types = defaultdict(int)
+        for loc in ob["locs"].values():
+            for k, v in loc["by_type"].items():
+                oblast_types[k] += v
+        top_by_type = {ALERT_TYPES.get(k, k): v for k, v in oblast_types.items()}
+
         by_level = defaultdict(list)
         for lo in locs_out:
             by_level[lo["level"]].append(lo)
@@ -150,7 +160,7 @@ def main():
             "uid": ruid, "name": ob["name"], "oblast": ob["oblast"],
             "count": top["count"], "total_hours": top["total_hours"],
             "avg_minutes": top["avg_minutes"],
-            "by_month": top["by_month"], "by_type": top["by_type"],
+            "by_month": top["by_month"], "by_type": top_by_type,
             "levels": {LEVEL_UA.get(k, k): by_level[k] for k in by_level},
         })
 
