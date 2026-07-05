@@ -79,6 +79,7 @@
     <div class="sub" id="d-sub"></div>
     <div class="cards" id="d-cards"></div>
     <div id="d-months"></div>
+    <div id="d-types"></div>
     <div id="d-levels"></div>
   </div>
 
@@ -110,7 +111,7 @@ function monthLabel(key){
 }
 
 function render(){
-  const regions=[...DATA.regions].sort((a,b)=>val(b)-val(a));
+  const regions=[...DATA.regions].filter(r=>r.count>0).sort((a,b)=>val(b)-val(a));
   const max=Math.max(...regions.map(val),1);
   document.getElementById("rank-unit").textContent=unit();
   const bars=document.getElementById("bars");bars.innerHTML="";
@@ -127,6 +128,25 @@ function render(){
 }
 
 // ── ЗМІНА 2: рендер помісячного графіка (стовпчики) для області ──
+function renderTypes(r){
+  const wrap=document.getElementById("d-types");wrap.innerHTML="";
+  const types=r.by_type||{};
+  const entries=Object.entries(types).sort((a,b)=>b[1]-a[1]);
+  if(!entries.length)return;
+  const sec=document.createElement("div");sec.style.marginBottom="26px";
+  sec.innerHTML=`<div class="panel-title"><span>За типами тривог</span><span></span></div>`;
+  const box=document.createElement("div");
+  box.style.display="flex";box.style.flexWrap="wrap";box.style.gap="8px";
+  entries.forEach(([name,cnt])=>{
+    const color=TYPE_COLORS[name]||TYPE_COLORS["unknown"];
+    const badge=document.createElement("span");
+    badge.style.cssText=`display:inline-flex;align-items:center;gap:6px;padding:5px 11px;border-radius:14px;background:${color}1a;border:1px solid ${color};font-size:13px;color:var(--ink)`;
+    badge.innerHTML=`<span style="width:8px;height:8px;border-radius:50%;background:${color}"></span>${name}<b style="font-weight:600">${cnt}</b>`;
+    box.appendChild(badge);
+  });
+  sec.appendChild(box);wrap.appendChild(sec);
+}
+
 function renderMonths(r){
   const wrap=document.getElementById("d-months");wrap.innerHTML="";
   const bm=r.by_month;
@@ -186,6 +206,7 @@ function showDetail(r){
     <div class="card"><div class="k">Середня, хв</div><div class="v">${r.avg_minutes.toFixed(0)}</div></div>`;
 
   renderMonths(r);
+  renderTypes(r);
 
   renderMonths(r);
 
