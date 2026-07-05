@@ -22,14 +22,15 @@
   .toggle button.active{background:var(--ink);color:var(--paper)}
   .panel-title{font-family:"Courier New",monospace;font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--muted);margin:8px 0 16px;display:flex;justify-content:space-between;align-items:baseline}
   .bars{display:flex;flex-direction:column;gap:6px}
-  .bar-row{display:grid;grid-template-columns:185px 1fr auto;gap:10px;align-items:center;font-size:14px;cursor:pointer;padding:3px 4px;border-radius:3px}
+  /* ── ЗМІНА 1: ширша колонка назви + перенос у два рядки замість обрізання ── */
+  .bar-row{display:grid;grid-template-columns:250px 1fr auto;gap:10px;align-items:center;font-size:14px;cursor:pointer;padding:3px 4px;border-radius:3px}
   .bar-row:hover{background:var(--panel)}
   .bar-row.sel{background:var(--panel);outline:1px solid var(--line)}
-  .bar-row .name{text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .bar-row .name{text-align:right;line-height:1.2;overflow-wrap:anywhere;hyphens:auto}
   .bar-track{height:18px;background:var(--s0);border-radius:1px}
   .bar-fill{height:100%;background:var(--accent);border-radius:1px;transition:width .4s}
   .bar-val{font-family:"Courier New",monospace;font-size:12px;color:var(--muted);min-width:60px;white-space:nowrap}
-  @media(max-width:520px){.bar-row{grid-template-columns:120px 1fr auto}.bar-row .name{font-size:12px}}
+  @media(max-width:520px){.bar-row{grid-template-columns:150px 1fr auto}.bar-row .name{font-size:12px}}
   .detail{margin-top:34px;border-top:1px solid var(--line);padding-top:24px}
   .detail h2{font-size:24px;font-weight:400;margin-bottom:4px}
   .detail .sub{font-family:"Courier New",monospace;font-size:12px;color:var(--muted);margin-bottom:20px}
@@ -77,6 +78,7 @@
     <h2 id="d-name"></h2>
     <div class="sub" id="d-sub"></div>
     <div class="cards" id="d-cards"></div>
+    <div id="d-months"></div>
     <div id="d-levels"></div>
   </div>
 
@@ -89,9 +91,23 @@
 
 <script>
 const TYPE_COLORS={"Повітряна тривога":"#c8442a","Артобстріл":"#d98a1f","Вуличні бої":"#6e6a5e","Хімічна загроза":"#7a9a3d","Ядерна загроза":"#8a4fb0","unknown":"#9a8f7d"};
+const MONTH_NAMES={"01":"січ","02":"лют","03":"бер","04":"кві","05":"тра","06":"чер","07":"лип","08":"сер","09":"вер","10":"жов","11":"лис","12":"гру"};
 let DATA=null,METRIC="dur",SEL=null;
 const val=r=>METRIC==="dur"?r.total_hours:r.count;
 const unit=()=>METRIC==="dur"?"години":"тривог";
+
+// Читає значення метрики з елемента by_month незалежно від формату (число, {total_hours,count}, {hours,count})
+function monthMetric(v){
+  if(typeof v==="number") return v;               // by_month може бути просто числом
+  if(v==null) return 0;
+  if(METRIC==="dur") return v.total_hours ?? v.hours ?? v.dur ?? 0;
+  return v.count ?? v.n ?? 0;
+}
+// Форматує підпис місяця з ключа "2026-06" → "чер"
+function monthLabel(key){
+  const m=String(key).slice(5,7);
+  return MONTH_NAMES[m]||key;
+}
 
 function render(){
   const regions=[...DATA.regions].sort((a,b)=>val(b)-val(a));
@@ -110,6 +126,56 @@ function render(){
   if(SEL){const r=regions.find(x=>x.uid===SEL);if(r)showDetail(r);}
 }
 
+// ── ЗМІНА 2: рендер помісячного графіка (стовпчики) для області ──
+function renderMonths(r){
+  const wrap=document.getElementById("d-months");wrap.innerHTML="";
+  const bm=r.by_month;
+  if(!bm) return;
+  // Підтримка двох форматів: об'єкт {"2026-05":..., "2026-06":...} або масив [{month:"2026-05",...}]
+  let entries;
+  if(Array.isArray(bm)){
+    entries=bm.map(x=>[x.month??x.key??x.m, x]);
+  }else{
+    entries=Object.entries(bm);
+  }
+  entries=entries.filter(e=>e[0]!=null).sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
+  if(!entries.length) return;
+  const vals=entries.map(e=>monthMetric(e[1]));
+  const max=Math.max(...vals,1);
+  const sec=document.createElement("div");sec.style.marginBottom="26px";
+  sec.innerHTML=`<div class="panel-title"><span>За місяцями</span><span>${unit()}</span></div>`;
+  const chart=document.createElement("div");chart.className="months";
+  entries.forEach((e,i)=>{
+    const v=vals[i];
+    const col=document.createElement("div");col.className="mcol";
+    col.innerHTML=`<div class="mval">${METRIC==="dur"?v.toFixed(0):v}</div>
+      <div class="mbar-wrap"><div class="mbar" style="height:${(v/max*100).toFixed(1)}%"></div></div>
+      <div class="mlabel">${monthLabel(e[0])}</div>`;
+    chart.appendChild(col);
+  });
+  sec.appendChild(chart);wrap.appendChild(sec);
+}
+
+function renderMonths(r){
+  const wrap=document.getElementById("d-months");wrap.innerHTML="";
+  const entries=Object.entries(r.by_month||{}).sort((a,b)=>a[0].localeCompare(b[0]));
+  if(!entries.length)return;
+  const pick=o=>METRIC==="dur"?o.hours:o.count;
+  const max=Math.max(...entries.map(([,o])=>pick(o)),1);
+  const sec=document.createElement("div");sec.style.marginBottom="26px";
+  sec.innerHTML=`<div class="panel-title"><span>За місяцями</span><span>${unit()}</span></div>`;
+  const chart=document.createElement("div");chart.className="months";
+  entries.forEach(([key,o])=>{
+    const v=pick(o);
+    const col=document.createElement("div");col.className="mcol";
+    col.innerHTML=`<div class="mval">${METRIC==="dur"?v.toFixed(0):v}</div>
+      <div class="mbar-wrap"><div class="mbar" style="height:${(v/max*100).toFixed(1)}%"></div></div>
+      <div class="mlabel">${o.label} ${key.slice(0,4)}</div>`;
+    chart.appendChild(col);
+  });
+  sec.appendChild(chart);wrap.appendChild(sec);
+}
+
 function showDetail(r){
   const d=document.getElementById("detail");d.style.display="block";
   document.getElementById("d-name").textContent=r.name;
@@ -118,6 +184,10 @@ function showDetail(r){
     <div class="card"><div class="k">Усього тривог</div><div class="v">${r.count}</div></div>
     <div class="card"><div class="k">Сумарно годин</div><div class="v">${r.total_hours.toFixed(0)}</div></div>
     <div class="card"><div class="k">Середня, хв</div><div class="v">${r.avg_minutes.toFixed(0)}</div></div>`;
+
+  renderMonths(r);
+
+  renderMonths(r);
 
   // Розбивка за рівнями (райони / громади / міста)
   const lw=document.getElementById("d-levels");lw.innerHTML="";
