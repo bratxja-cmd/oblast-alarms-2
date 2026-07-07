@@ -184,35 +184,6 @@ function renderTypes(r){
 
 function renderMonths(r){
   const wrap=document.getElementById("d-months");wrap.innerHTML="";
-  const bm=r.by_month;
-  if(!bm) return;
-  // Підтримка двох форматів: об'єкт {"2026-05":..., "2026-06":...} або масив [{month:"2026-05",...}]
-  let entries;
-  if(Array.isArray(bm)){
-    entries=bm.map(x=>[x.month??x.key??x.m, x]);
-  }else{
-    entries=Object.entries(bm);
-  }
-  entries=entries.filter(e=>e[0]!=null).sort((a,b)=>String(a[0]).localeCompare(String(b[0])));
-  if(!entries.length) return;
-  const vals=entries.map(e=>monthMetric(e[1]));
-  const max=Math.max(...vals,1);
-  const sec=document.createElement("div");sec.style.marginBottom="26px";
-  sec.innerHTML=`<div class="panel-title"><span>За місяцями</span><span>${unit()}</span></div>`;
-  const chart=document.createElement("div");chart.className="months";
-  entries.forEach((e,i)=>{
-    const v=vals[i];
-    const col=document.createElement("div");col.className="mcol";
-    col.innerHTML=`<div class="mval">${METRIC==="dur"?v.toFixed(0):v}</div>
-      <div class="mbar-wrap"><div class="mbar" style="height:${(v/max*100).toFixed(1)}%"></div></div>
-      <div class="mlabel">${monthLabel(e[0])}</div>`;
-    chart.appendChild(col);
-  });
-  sec.appendChild(chart);wrap.appendChild(sec);
-}
-
-function renderMonths(r){
-  const wrap=document.getElementById("d-months");wrap.innerHTML="";
   const entries=Object.entries(r.by_month||{}).sort((a,b)=>a[0].localeCompare(b[0]));
   if(!entries.length)return;
   const pick=o=>METRIC==="dur"?o.hours:o.count;
